@@ -80,6 +80,14 @@ class NpyDataset(Dataset):
         img_1024 = np.load(
             join(self.img_path, img_name), "r", allow_pickle=True
         )  # (1024, 1024, 3)
+        if len(img_1024.shape) == 2:
+            img_1024 = np.repeat(img_1024[:, :, None], 3, axis=-1)
+
+        if img_1024.dtype == np.uint8 or \
+           img_1024.dtype == np.uint16:
+            img_1024 = (img_1024 - img_1024.min()) / np.clip(
+                img_1024.max() - img_1024.min(), a_min=1e-8, a_max=None)
+
         # convert the shape to (3, H, W)
         img_1024 = np.transpose(img_1024, (2, 0, 1))
         assert (
@@ -123,7 +131,7 @@ class NpyDataset(Dataset):
 
 
 # %% sanity test of dataset class
-tr_dataset = NpyDataset("data/npy/CT_Abd")
+tr_dataset = NpyDataset("data/npy/hedm_powder")
 tr_dataloader = DataLoader(tr_dataset, batch_size=8, shuffle=True)
 for step, (image, gt, bboxes, points, names_temp) in enumerate(tr_dataloader):
     print(image.shape, gt.shape, bboxes.shape)
@@ -155,7 +163,7 @@ parser.add_argument(
     "-i",
     "--tr_npy_path",
     type=str,
-    default="data/npy/CT_Abd",
+    default="data/npy/hedm_powder",
     help="path to training npy files; two subfolders: gts and imgs",
 )
 parser.add_argument("-task_name", type=str, default="MedSAM-ViT-B")
