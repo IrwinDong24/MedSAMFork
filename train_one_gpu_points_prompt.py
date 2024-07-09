@@ -55,40 +55,6 @@ def show_box(box, ax):
     )
 
 
-def generate_random_points(bboxes, n):
-    """
-    Generate n random points within a given bounding box.
-
-    Parameters:
-    n (int): Number of points to generate.
-    bboxes (ndarray): Bounding boxes defined as (xmin, ymin, xmax, ymax).
-
-    Returns:
-    numpy.ndarray: Array of shape (n, 2) with random points.
-    """
-
-    # Extract the coordinates of the bounding boxes
-    xmin = bboxes[:, 0]
-    ymin = bboxes[:, 1]
-    xmax = bboxes[:, 2]
-    ymax = bboxes[:, 3]
-
-    # Number of bounding boxes
-    m = bboxes.shape[0]
-
-    # Generate n random points for each bounding box
-    x_points = np.random.uniform(0, 1, (m, n))
-    y_points = np.random.uniform(0, 1, (m, n))
-
-    # Scale the random points to the size of the bounding boxes
-    x_points = xmin[:, np.newaxis] + x_points * (xmax - xmin)[:, np.newaxis]
-    y_points = ymin[:, np.newaxis] + y_points * (ymax - ymin)[:, np.newaxis]
-
-    # Combine x and y points into an array of shape (m, n, 2)
-    points = np.stack((x_points, y_points), axis=-1)
-    return points
-
-
 class NpyDataset(Dataset):
     def __init__(self, data_root, bbox_shift=20):
         self.data_root = data_root
@@ -131,6 +97,7 @@ class NpyDataset(Dataset):
         )  # only one label, (256, 256)
         assert np.max(gt2D) == 1 and np.min(gt2D) == 0.0, "ground truth should be 0, 1"
         y_indices, x_indices = np.where(gt2D > 0)
+
         x_min, x_max = np.min(x_indices), np.max(x_indices)
         y_min, y_max = np.min(y_indices), np.max(y_indices)
         # add perturbation to bounding box coordinates
@@ -140,10 +107,17 @@ class NpyDataset(Dataset):
         y_min = max(0, y_min - random.randint(0, self.bbox_shift))
         y_max = min(H, y_max + random.randint(0, self.bbox_shift))
         bboxes = np.array([x_min, y_min, x_max, y_max])
+
+        # randomly pick a point in the mask area
+        index_rand_pick = random.randint(0, len(y_indices)-1)
+        rand_point = np.array([x_indices[index_rand_pick],
+                               y_indices[index_rand_pick]])
+
         return (
             torch.tensor(img_1024).float(),
             torch.tensor(gt2D[None, :, :]).long(),
             torch.tensor(bboxes).float(),
+            torch.tensor(rand_point).float(),
             img_name,
         )
 
@@ -151,7 +125,7 @@ class NpyDataset(Dataset):
 # %% sanity test of dataset class
 tr_dataset = NpyDataset("data/npy/CT_Abd")
 tr_dataloader = DataLoader(tr_dataset, batch_size=8, shuffle=True)
-for step, (image, gt, bboxes, names_temp) in enumerate(tr_dataloader):
+for step, (image, gt, bboxes, points, names_temp) in enumerate(tr_dataloader):
     print(image.shape, gt.shape, bboxes.shape)
     # show the example
     _, axs = plt.subplots(1, 2, figsize=(25, 25))
@@ -349,32 +323,28 @@ def main():
 
     for epoch in range(start_epoch, num_epochs):
         epoch_loss = 0
-        for step, (image, gt2D, boxes, _) in enumerate(tqdm(train_dataloader)):
+        for step, (image, gt2D, bboxes, points, _) in enumerate(tqdm(train_dataloader)):
             optimizer.zero_grad()
-            boxes_np = boxes.detach().cpu().numpy()
-
-            points = generate_random_points(boxes_np, 5)
+            points_np = points.detach().cpu().numpy()
 
             image, gt2D = image.to(device), gt2D.to(device)
-            for p in range(0, points.shape[1]):
-                point = points[:, p, :]
-                if args.use_amp:
-                    ## AMP
-                    with torch.autocast(device_type="cuda", dtype=torch.float16):
-                        medsam_pred = medsam_model(image, point)
-                        loss = seg_loss(medsam_pred, gt2D) + ce_loss(
-                            medsam_pred, gt2D.float()
-                        )
-                    scaler.scale(loss).backward()
-                    scaler.step(optimizer)
-                    scaler.update()
-                    optimizer.zero_grad()
-                else:
-                    medsam_pred = medsam_model(image, point)
-                    loss = seg_loss(medsam_pred, gt2D) + ce_loss(medsam_pred, gt2D.float())
-                    loss.backward()
-                    optimizer.step()
-                    optimizer.zero_grad()
+            if args.use_amp:
+                ## AMP
+                with torch.autocast(device_type="cuda", dtype=torch.float16):
+                    medsam_pred = medsam_model(image, points_np)
+                    loss = seg_loss(medsam_pred, gt2D) + ce_loss(
+                        medsam_pred, gt2D.float()
+                    )
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
+            else:
+                medsam_pred = medsam_model(image, points_np)
+                loss = seg_loss(medsam_pred, gt2D) + ce_loss(medsam_pred, gt2D.float())
+                loss.backward()
+                optimizer.step()
+                optimizer.zero_grad()
 
                 epoch_loss += loss.item()
                 iter_num += 1
