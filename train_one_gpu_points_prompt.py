@@ -125,7 +125,7 @@ class NpyDataset(Dataset):
         if samples_cnt < SAMPLES_TO_PICK:
             last_row = pos_prompt_rand_points[-1, :]
             replicates = np.tile(last_row, (SAMPLES_TO_PICK-samples_cnt, 1))
-            pos_prompt_rand_points = np.vstack(pos_prompt_rand_points, replicates)
+            pos_prompt_rand_points = np.vstack((pos_prompt_rand_points, replicates))
         
         zero_y_indices, zero_x_indices = np.where(gt == 0)
         neg_index_rank_picks = random.sample(range(len(zero_y_indices)), SAMPLES_TO_PICK)
