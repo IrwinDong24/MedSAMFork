@@ -102,14 +102,26 @@ class NpyDataset(Dataset):
         bboxes = np.array([x_min, y_min, x_max, y_max])
 
         # randomly pick a point in the mask area
-        index_rand_pick = random.randint(0, len(y_indices)-1)
-        rand_point = np.array([x_indices[index_rand_pick],
-                               y_indices[index_rand_pick]])
+        SAMPLES_TO_PICK = 3
+        samples_cnt = min(len(y_indices), SAMPLES_TO_PICK)
+        index_rank_picks = random.sample(range(len(y_indices)), samples_cnt)
+        pos_prompt_rand_points = np.column_stack((x_indices[index_rank_picks],
+                                                  y_indices[index_rank_picks]))
+        if samples_cnt < SAMPLES_TO_PICK:
+            last_row = pos_prompt_rand_points[-1, :]
+            replicates = np.tile(last_row, (SAMPLES_TO_PICK-samples_cnt, 1))
+            pos_prompt_rand_points = np.vstack(pos_prompt_rand_points, replicates)
+        
+        zero_y_indices, zero_x_indices = np.where(gt == 0)
+        neg_index_rank_picks = random.sample(range(len(zero_y_indices)), SAMPLES_TO_PICK)
+        neg_prompt_rand_points = np.column_stack((zero_x_indices[neg_index_rank_picks],
+                                                  zero_y_indices[neg_index_rank_picks]))
         return (
             torch.tensor(img_1024).float(),
             torch.tensor(gt2D[None, :, :]).long(),
             torch.tensor(bboxes).float(),
-            torch.tensor(rand_point).float(),
+            torch.tensor(pos_prompt_rand_points).float(),
+            torch.tensor(neg_prompt_rand_points).float(),
             img_name,
         )
 
@@ -117,7 +129,7 @@ class NpyDataset(Dataset):
 # %% sanity test of dataset class
 tr_dataset = NpyDataset("data/npy/CT_Abd")
 tr_dataloader = DataLoader(tr_dataset, batch_size=8, shuffle=True)
-for step, (image, gt, bboxes, points, names_temp) in enumerate(tr_dataloader):
+for step, (image, gt, bboxes, pos_points, neg_points, names_temp) in enumerate(tr_dataloader):
     print(image.shape, gt.shape, bboxes.shape)
     # show the example
     _, axs = plt.subplots(1, 2, figsize=(25, 25))
@@ -403,11 +415,35 @@ def main_worker(gpu, ngpus_per_node, args):
     for epoch in range(start_epoch, num_epochs):
         epoch_loss = 0
         train_dataloader.sampler.set_epoch(epoch)
-        for step, (image, gt2D, boxes, points, _) in enumerate(
+        for step, (image, gt2D, boxes, pos_points, neg_points, _) in enumerate(
             tqdm(train_dataloader, desc=f"[RANK {rank}: GPU {gpu}]")
         ):
             optimizer.zero_grad()
-            points_np = points.detach().cpu().numpy()
+            multi_points = pos_points.detach().cpu().numpy()
+            neg_multi_points = neg_points.detach().cpu().numpy()
+            pos_coords = []
+            neg_coords = []
+            
+            # positive prompts
+            for i in range(multi_points.shape[1]):
+                points = multi_points[:,i,:]
+                points_torch = torch.as_tensor(points, dtype=torch.float32, device='cuda')
+                if len(points_torch.shape) == 2:
+                    points_torch = points_torch[:, None, :]  # (B, 1, 2)
+
+                labels_torch = torch.ones(points_torch.shape[0], 1, device='cuda')
+                pos_coords.append((points_torch, labels_torch))
+
+            # negtive prompts
+            for i in range(neg_multi_points.shape[1]):
+                points = neg_multi_points[:,i,:]
+                points_torch = torch.as_tensor(points, dtype=torch.float32, device='cuda')
+                if len(points_torch.shape) == 2:
+                    points_torch = points_torch[:, None, :]  # (B, 1, 2)
+
+                labels_torch = torch.zeros(points_torch.shape[0], 1, device='cuda')
+                neg_coords.append((points_torch, labels_torch))
+
             # image, gt2D = image.to(device), gt2D.to(device)
             image, gt2D = image.cuda(), gt2D.cuda()
 
