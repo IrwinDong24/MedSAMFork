@@ -150,14 +150,14 @@ img_1024 = (img_1024 - img_1024.min()) / np.clip(
 
 """
 input_points (torch.FloatTensor of shape (batch_size, num_points, 2)) —
-Input 2D spatial points, this is used by the prompt encoder to encode the prompt.
+Input 2D spatial poinots, this is used by the prompt encoder to encode the prompt.
 Generally yields to much better results. The points can be obtained by passing a
 list of list of list to the processor that will create corresponding torch tensors
 of dimension 4. The first dimension is the image batch size, the second dimension
 is the point batch size (i.e. how many segmentation masks do we want the model to
 predict per input point), the third dimension is the number of points per segmentation
 mask (it is possible to pass multiple points for a single mask), and the last dimension
-is the x (vertical) and y (horizontal) coordinates of the point. If a different number
+is the x (vertical) and y (hrizontal) coordinates of the point. If a different number
 of points is passed either for each image, or for each mask, the processor will create
 “PAD” points that will correspond to the (0, 0) coordinate, and the computation of the
 embedding will be skipped for these points using the labels.
@@ -233,7 +233,7 @@ rect1 = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='r', facecolor='n
 ax[1].add_patch(rect1)
 #show_mask(medsam_seg, ax[1])
 #show_box(box_np[0], ax[1])
-ax[1].set_title("MedSAM Segmentation")
+ax[1].set_title("APSSAM Segmentation")
 ax[2].imshow(prob_map)  # Assuming the second image is grayscale
 rect2 = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='r', facecolor='none')
 ax[2].add_patch(rect2)

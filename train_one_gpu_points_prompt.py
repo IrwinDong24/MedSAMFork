@@ -131,7 +131,7 @@ class NpyDataset(Dataset):
 
 
 # %% sanity test of dataset class
-tr_dataset = NpyDataset("data/npy/hedm_powder")
+tr_dataset = NpyDataset("/homes/xma/MedSAM/data/npy/hedm_powder")
 tr_dataloader = DataLoader(tr_dataset, batch_size=8, shuffle=True)
 for step, (image, gt, bboxes, points, names_temp) in enumerate(tr_dataloader):
     print(image.shape, gt.shape, bboxes.shape)

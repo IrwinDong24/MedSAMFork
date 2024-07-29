@@ -307,16 +307,15 @@ def generate_simulation_image(image_idx):
 
     #plt.show()
 
-    os.makedirs('data/npy/hedm_powder/imgs/', exist_ok=True)
-    os.makedirs('data/npy/hedm_powder/gts/', exist_ok=True)
-    np.save(f'data/npy/hedm_powder/imgs/img_{image_idx}.npy', img)
-    np.save(f'data/npy/hedm_powder/gts/img_{image_idx}.npy', mask)
+    os.makedirs('/homes/xma/medsam_xu/MedSAMFork/data/npy/hedm_powder/imgs/', exist_ok=True)
+    os.makedirs('/homes/xma/medsam_xu/MedSAMFork/data/npy/hedm_powder/gts/', exist_ok=True)
+    np.save(f'/homes/xma/medsam_xu/MedSAMFork/data/npy/hedm_powder/imgs/img_{image_idx}.npy', img)
+    np.save(f'/homes/xma/medsam_xu/MedSAMFork/data/npy/hedm_powder/gts/img_{image_idx}.npy', mask)
     plt.close('all')
-
 
 # python main function
 def main():
-    for i in tqdm(range(305, 1000)):
+    for i in tqdm(range(0, 1000)):
         generate_simulation_image(i)
 
 if __name__ == "__main__":
