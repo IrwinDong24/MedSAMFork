@@ -160,7 +160,7 @@ embedding will be skipped for these points using the labels.
 array_size = 1024
 
 # Define the size of your grid
-grid_size = 128
+grid_size = 256
 
 # Generate the grid points
 x = np.linspace(0, array_size - 1, grid_size)
@@ -188,8 +188,8 @@ input_points = torch.tensor(input_points).view(grid_size, grid_size, 2)
 foreground_mask = img_1024.sum(axis=2) > 0
 
 # Extract the input points and map them to labels
-labels = foreground_mask[input_points[..., 0], input_points[..., 1]].astype(int)
-#labels = np.ones((grid_size, grid_size))
+#labels = foreground_mask[input_points[..., 0], input_points[..., 1]].astype(int)
+labels = np.ones((grid_size, grid_size))
 labels = torch.tensor(labels)
 
 # randomly pick one point from the mask
@@ -234,7 +234,7 @@ ax[1].imshow(medsam_seg, cmap='gray')
 #ax[1].add_patch(rect1)
 #ax[1].plot(rand_point[0], rand_point[1], 'bo', markersize=2)
 #show_box(box_np[0], ax[1])
-ax[1].set_title("APS Segmentation")
+ax[1].set_title(f"APS Segmentation {grid_size}x{grid_size} Points Prompting")
 
 prob_map = transpose_compress_layers(prob_map)
 cax = ax[2].imshow(prob_map, cmap='viridis', interpolation='nearest')  # Assuming the second image is grayscale
@@ -247,5 +247,5 @@ ax[3].imshow(mask_np)
 #rect3 = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='r', facecolor='none')
 #ax[3].add_patch(rect3)
 ax[3].set_title("Ground Truth Mask")
-plt.savefig("medsam_inference.png")
+plt.savefig(f"medsam_inference_{grid_size}x{grid_size}.png")
 plt.show()
