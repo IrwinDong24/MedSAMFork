@@ -117,15 +117,26 @@ class NpyDataset(Dataset):
         bboxes = np.array([x_min, y_min, x_max, y_max])
 
         # randomly pick a point in the mask area
-        index_rand_pick = random.randint(0, len(y_indices)-1)
-        rand_point = np.array([x_indices[index_rand_pick],
-                               y_indices[index_rand_pick]])
-
+        SAMPLES_TO_PICK = 3
+        samples_cnt = min(len(y_indices), SAMPLES_TO_PICK)
+        index_rank_picks = random.sample(range(len(y_indices)), samples_cnt)
+        pos_prompt_rand_points = np.column_stack((x_indices[index_rank_picks],
+                                                  y_indices[index_rank_picks]))
+        if samples_cnt < SAMPLES_TO_PICK:
+            last_row = pos_prompt_rand_points[-1, :]
+            replicates = np.tile(last_row, (SAMPLES_TO_PICK-samples_cnt, 1))
+            pos_prompt_rand_points = np.vstack((pos_prompt_rand_points, replicates))
+        
+        zero_y_indices, zero_x_indices = np.where(gt == 0)
+        neg_index_rank_picks = random.sample(range(len(zero_y_indices)), SAMPLES_TO_PICK)
+        neg_prompt_rand_points = np.column_stack((zero_x_indices[neg_index_rank_picks],
+                                                  zero_y_indices[neg_index_rank_picks]))
         return (
             torch.tensor(img_1024).float(),
             torch.tensor(gt2D[None, :, :]).long(),
             torch.tensor(bboxes).float(),
-            torch.tensor(rand_point).float(),
+            torch.tensor(pos_prompt_rand_points).float(),
+            torch.tensor(neg_prompt_rand_points).float(),
             img_name,
         )
 
@@ -133,7 +144,7 @@ class NpyDataset(Dataset):
 # %% sanity test of dataset class
 tr_dataset = NpyDataset("/homes/xma/MedSAM/data/npy/hedm_powder")
 tr_dataloader = DataLoader(tr_dataset, batch_size=8, shuffle=True)
-for step, (image, gt, bboxes, points, names_temp) in enumerate(tr_dataloader):
+for step, (image, gt, bboxes, pos_points, neg_points, names_temp) in enumerate(tr_dataloader):
     print(image.shape, gt.shape, bboxes.shape)
     # show the example
     _, axs = plt.subplots(1, 2, figsize=(25, 25))
@@ -235,18 +246,12 @@ class MedSAM(nn.Module):
         for param in self.prompt_encoder.parameters():
             param.requires_grad = False
 
-    def forward(self, image, points):
+    def forward(self, image, coords):
         image_embedding = self.image_encoder(image)  # (B, 256, 64, 64)
         # do not compute gradients for prompt encoder
         with torch.no_grad():
-            points_torch = torch.as_tensor(points, dtype=torch.float32, device=image.device)
-            if len(points_torch.shape) == 2:
-                points_torch = points_torch[:, None, :]  # (B, 1, 2)
-
-            labels_torch = torch.ones(points.shape[0], 1, device=image.device)
-            prompt_points = (points_torch, labels_torch)
             sparse_embeddings, dense_embeddings = self.prompt_encoder(
-                points=prompt_points, # point (tuple(torch.Tensor, torch.Tensor) or none): point coordinates and labels to embed.
+                points=coords, # point (tuple(torch.Tensor, torch.Tensor) or none): point coordinates and labels to embed.
                 boxes=None,
                 masks=None,
             )
@@ -329,33 +334,80 @@ def main():
     if args.use_amp:
         scaler = torch.cuda.amp.GradScaler()
 
-    for epoch in range(start_epoch, num_epochs):
+    for epoch in tqdm(range(start_epoch, num_epochs)):
         epoch_loss = 0
-        for step, (image, gt2D, bboxes, points, _) in enumerate(tqdm(train_dataloader)):
+        for step, (image, gt2D, bboxes, pos_points, neg_points, _) in enumerate(tqdm(train_dataloader)):
             optimizer.zero_grad()
-            points_np = points.detach().cpu().numpy()
+            multi_points = pos_points.detach().cpu().numpy()
+            neg_multi_points = neg_points.detach().cpu().numpy()
+            pos_coords = []
+            neg_coords = []
 
-            image, gt2D = image.to(device), gt2D.to(device)
-            if args.use_amp:
-                ## AMP
-                with torch.autocast(device_type="cuda", dtype=torch.float16):
-                    medsam_pred = medsam_model(image, points_np)
-                    loss = seg_loss(medsam_pred, gt2D) + ce_loss(
-                        medsam_pred, gt2D.float()
-                    )
-                scaler.scale(loss).backward()
-                scaler.step(optimizer)
-                scaler.update()
-                optimizer.zero_grad()
-            else:
-                medsam_pred = medsam_model(image, points_np)
-                loss = seg_loss(medsam_pred, gt2D) + ce_loss(medsam_pred, gt2D.float())
-                loss.backward()
-                optimizer.step()
-                optimizer.zero_grad()
+            # positive prompts
+            for i in range(multi_points.shape[1]):
+                points = multi_points[:,i,:]
+                points_torch = torch.as_tensor(points, dtype=torch.float32, device=device)
+                if len(points_torch.shape) == 2:
+                    points_torch = points_torch[:, None, :]  # (B, 1, 2)
 
-                epoch_loss += loss.item()
-                iter_num += 1
+                labels_torch = torch.ones(points_torch.shape[0], 1, device=device)
+                pos_coords.append((points_torch, labels_torch))
+
+            # negtive prompts
+            for i in range(neg_multi_points.shape[1]):
+                points = neg_multi_points[:,i,:]
+                points_torch = torch.as_tensor(points, dtype=torch.float32, device=device)
+                if len(points_torch.shape) == 2:
+                    points_torch = points_torch[:, None, :]  # (B, 1, 2)
+
+                labels_torch = torch.zeros(points_torch.shape[0], 1, device=device)
+                neg_coords.append((points_torch, labels_torch))
+
+            for coord in pos_coords:
+                image, gt2D = image.to(device), gt2D.to(device)
+                if args.use_amp:
+                    ## AMP
+                    with torch.autocast(device_type="cuda", dtype=torch.float16):
+                        medsam_pred = medsam_model(image, coord)
+                        loss = seg_loss(medsam_pred, gt2D) + ce_loss(
+                            medsam_pred, gt2D.float()
+                        )
+                    scaler.scale(loss).backward()
+                    scaler.step(optimizer)
+                    scaler.update()
+                    optimizer.zero_grad()
+                else:
+                    medsam_pred = medsam_model(image, coord)
+                    loss = seg_loss(medsam_pred, gt2D) + ce_loss(medsam_pred, gt2D.float())
+                    loss.backward()
+                    optimizer.step()
+                    optimizer.zero_grad()
+
+                    epoch_loss += loss.item()
+                    iter_num += 1
+
+            for coord in neg_coords:
+                image, gt2DZeros = image.to(device), torch.zeros_like(gt2D, device=device)
+                if args.use_amp:
+                    ## AMP
+                    with torch.autocast(device_type="cuda", dtype=torch.float16):
+                        medsam_pred = medsam_model(image, coord)
+                        loss = seg_loss(medsam_pred, gt2DZeros) + ce_loss(
+                            medsam_pred, gt2DZeros.float()
+                        )
+                    scaler.scale(loss).backward()
+                    scaler.step(optimizer)
+                    scaler.update()
+                    optimizer.zero_grad()
+                else:
+                    medsam_pred = medsam_model(image, coord)
+                    loss = seg_loss(medsam_pred, gt2DZeros) + ce_loss(medsam_pred, gt2DZeros.float())
+                    loss.backward()
+                    optimizer.step()
+                    optimizer.zero_grad()
+
+                    epoch_loss += loss.item()
+                    iter_num += 1
 
         #epoch_loss /= step
         epoch_loss /= iter_num

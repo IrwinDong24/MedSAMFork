@@ -15,17 +15,9 @@ import torch.nn.functional as F
 import argparse
 
 
-# visualization functions
-# source: https://github.com/facebookresearch/segment-anything/blob/main/notebooks/predictor_example.ipynb
-# change color to avoid red and green
-def show_mask(mask, ax, random_color=False):
-    if random_color:
-        color = np.concatenate([np.random.random(3), np.array([0.6])], axis=0)
-    else:
-        color = np.array([251 / 255, 252 / 255, 30 / 255, 0.6])
-    h, w = mask.shape[-2:]
-    mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
-    ax.imshow(mask_image, cmap='gray')
+def transpose_compress_layers(mask):
+    mask = np.transpose(mask, (1, 2, 0)) 
+    return np.max(mask, axis=2, keepdims=True)
 
 
 def show_box(box, ax):
@@ -105,6 +97,7 @@ args = parser.parse_args()
 
 device = args.device
 sam_checkpoint = "sam_vit_b_01ec64.pth"
+medsam_checkpoint = "work_dir/MedSAM/medsam_vit_b.pth"
 medsam_model = sam_model_registry["vit_b"](checkpoint=sam_checkpoint)
 #med_sam_checkpoint = "medsam_model_best.pth"
 state_dict = torch.load(args.checkpoint, map_location=torch.device('cpu'))
@@ -167,7 +160,7 @@ embedding will be skipped for these points using the labels.
 array_size = 1024
 
 # Define the size of your grid
-grid_size = 10
+grid_size = 256
 
 # Generate the grid points
 x = np.linspace(0, array_size - 1, grid_size)
@@ -181,24 +174,30 @@ xv_list = xv.tolist()
 yv_list = yv.tolist()
 
 # Combine the x and y coordinates into a list of list of lists
-#input_points = [[[int(x), int(y)] for x, y in zip(x_row, y_row)] for x_row, y_row in zip(xv_list, yv_list)]
+input_points = [[[int(x), int(y)] for x, y in zip(x_row, y_row)] for x_row, y_row in zip(xv_list, yv_list)]
 
-index_rand_pick = random.randint(0, len(y_indices) - 1)
-rand_point = np.array([x_indices[index_rand_pick],
-                       y_indices[index_rand_pick]])
-input_points =np.array([[rand_point]])
 # We need to reshape our nxn grid to the expected shape of the input_points tensor
 # (batch_size, point_batch_size, num_points_per_image, 2),
 # where the last dimension of 2 represents the x and y coordinates of each point.
 # batch_size: The number of images you're processing at once.
 # point_batch_size: The number of point sets you have for each image.
 # num_points_per_image: The number of points in each set.
-input_points = torch.tensor(input_points).view(1, 1, 2)
-labels = torch.tensor(np.ones((1, 1)))  # all labelled as foregrounds
+input_points = torch.tensor(input_points).view(grid_size, grid_size, 2)
 
-#for i in range(grid_size*grid_size):
-#    if img_1024[input_points[0][i][0], input_points[0][i][1]].sum() < 3.0:  # foreground point
-#        labels[0][i] = 1
+# Convert img_1024 to a binary mask where any non-zero pixel sum is a foreground point
+foreground_mask = img_1024.sum(axis=2) > 0
+
+# Extract the input points and map them to labels
+#labels = foreground_mask[input_points[..., 0], input_points[..., 1]].astype(int)
+labels = np.ones((grid_size, grid_size))
+labels = torch.tensor(labels)
+
+# randomly pick one point from the mask
+index_rand_pick = random.randint(0, len(y_indices) - 1)
+rand_point = np.array([x_indices[index_rand_pick],
+                       y_indices[index_rand_pick]])
+# input_points =np.array([[rand_point]])
+# labels = torch.tensor(np.ones((1, 1)))  # all labelled as foregrounds
 
 input_points = input_points.to(device)
 labels = labels.to(device)
@@ -226,21 +225,27 @@ fig, ax = plt.subplots(1, 4, figsize=(20, 5))
 ax[0].imshow(img_np)
 #show_box(box_np[0], ax[0])
 ax[0].set_title("Input Image")
+
+medsam_seg = transpose_compress_layers(medsam_seg)
 ax[1].imshow(medsam_seg, cmap='gray')
-bbox = bboxes
-((x, y), w, h) = ((bbox[0], bbox[1]), bbox[2]-bbox[0], bbox[3]-bbox[1])
-rect1 = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='r', facecolor='none')
-ax[1].add_patch(rect1)
-#show_mask(medsam_seg, ax[1])
+#bbox = bboxes
+#((x, y), w, h) = ((bbox[0], bbox[1]), bbox[2]-bbox[0], bbox[3]-bbox[1])
+#rect1 = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='r', facecolor='none')
+#ax[1].add_patch(rect1)
+#ax[1].plot(rand_point[0], rand_point[1], 'bo', markersize=2)
 #show_box(box_np[0], ax[1])
-ax[1].set_title("APSSAM Segmentation")
-ax[2].imshow(prob_map)  # Assuming the second image is grayscale
-rect2 = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='r', facecolor='none')
-ax[2].add_patch(rect2)
+ax[1].set_title(f"APS Segmentation {grid_size}x{grid_size} Points Prompting")
+
+prob_map = transpose_compress_layers(prob_map)
+cax = ax[2].imshow(prob_map, cmap='viridis', interpolation='nearest')  # Assuming the second image is grayscale
+#rect2 = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='r', facecolor='none')
+#ax[2].add_patch(rect2)
 ax[2].set_title("Probability Map")
+fig.colorbar(cax, ax=ax[2])
+
 ax[3].imshow(mask_np)
-rect3 = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='r', facecolor='none')
-ax[3].add_patch(rect3)
+#rect3 = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='r', facecolor='none')
+#ax[3].add_patch(rect3)
 ax[3].set_title("Ground Truth Mask")
-plt.savefig("medsam_inference.png")
+plt.savefig(f"medsam_inference_{grid_size}x{grid_size}.png")
 plt.show()
